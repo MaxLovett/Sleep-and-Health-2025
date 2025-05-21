@@ -1,0 +1,572 @@
+---
+title: "Week 13 Class Average"
+author: "Zhenyu Li"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    number_sections: false
+    theme: paper
+    highlight: zenburn
+    fig_caption: true
+    keep_md: false
+    df_print: kable
+    self_contained: true
+    fig_dpi: 300
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd(getwd())
+Sys.setenv(TZ = "Asia/Shanghai")
+library(readxl)
+library(lubridate)
+library(tidyverse)
+library(writexl)
+library(openxlsx)
+library(modelsummary)
+options(scipen = 999)
+
+mytheme <- theme(
+    panel.grid.major.y = element_line(color = "gray90"),
+    panel.grid.major.x =  element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),  # 设置坐标轴线
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+```
+
+```{r read data, echo=FALSE, include=FALSE}
+# df0 = read_excel("《睡眠与健康》睡眠日志raw-第一批.xlsx")
+
+# 第二批
+df0 = read_excel("《睡眠与健康》课程追踪问卷.xlsx")
+
+df = df0
+
+# 修正日期错误
+df = df %>% 
+  mutate(
+    date_of_today = case_when(
+      序号 == "25" ~ "2025-03-08",
+      序号 == "85" ~ "2025-03-26",
+      序号 == "113" ~ "2025-04-06",
+      TRUE ~ date_of_today
+    ),
+    bed_time = case_when(
+      序号 == "31" ~ "2025-03-08 00:30:34",
+      序号 == "35" ~ "2025-03-08 01:47:00",
+      序号 == "56" ~ "2025-03-15 00:30:33",
+      TRUE ~ bed_time
+    ),
+    prepare_to_sleep_time = case_when(
+      序号 == "2" ~ "02:00:34",
+      序号 == "168" ~ "03:07:48",
+      TRUE ~ prepare_to_sleep_time
+    ),
+  ) %>% 
+  # 入睡时间填写过于极端（超过凌晨四点，且躺在床上时间和入睡时间差距过大）
+  filter(
+    序号 != "70" & 序号 != "118"
+  ) 
+
+df$prepare_to_sleep_time = paste0(df$date_of_today, " ", df$prepare_to_sleep_time)
+
+# 将字符型时间转换为 POSIXct 格式
+df$bed_time = as.POSIXct(df$bed_time, format = "%Y-%m-%d %H:%M:%S")
+```
+
+上床时间清理
+
+```{r data cleaning-bedtime}
+df$prepare_to_sleep_time = as.POSIXct(df$prepare_to_sleep_time, format = "%Y-%m-%d %H:%M:%S")
+
+# 创建 date_of_today 的凌晨 00:00 时间戳
+df$date_of_today_midnight = as.POSIXct(paste0(as.Date(df$date_of_today), " 00:00:00"), 
+                                       format = "%Y-%m-%d %H:%M:%S")
+
+# 计算时间差（单位：分钟）
+
+# 上床时间和当天日期的差值，差异应在 ±12 小时内
+df$bed_from_midnight_mins = as.numeric(difftime(df$bed_time, df$date_of_today_midnight, units = "mins"))
+
+# 准备睡觉时间与当天凌晨的差值，用于检查是否在 ±12 小时内
+df$prepare_from_midnight_mins = as.numeric(difftime(df$prepare_to_sleep_time, df$date_of_today_midnight, units = "mins"))
+
+# 准备睡觉时间与上床时间的差值，预期为正（prepare_to_sleep_time > bed_time）
+df$prepare_minus_bed_mins = as.numeric(difftime(df$prepare_to_sleep_time, df$bed_time, units = "mins"))
+
+
+# 修正时间数据
+df = df %>% 
+  mutate(
+    # 分情况修正 bed_time 和 prepare_to_sleep_time
+    
+    bed_time_revise = case_when(
+      
+      bed_from_midnight_mins < -1080 & bed_from_midnight_mins >= -1440 ~ bed_time + hours(24),  # 如果显示是前一天凌晨0-6点之间睡的，认为是日期填错了一天，但是时制填对了，所以加24小时
+      
+      bed_from_midnight_mins < -660 & bed_from_midnight_mins >= -1080 ~ bed_time + hours(12),  # 如果显示是前一天早上6点到中午13点之点睡的，认为是日期填对了，但是把24小时制的时间当成12小时制的时间，所以加12小时
+      bed_from_midnight_mins > 360 & bed_from_midnight_mins <= 780 ~ bed_time - hours(12),  # 如果显示是当天早上6点到中午13点之间睡的，认为是把日期和时制都填错了，所以减去12小时
+      bed_from_midnight_mins > 1080 & bed_from_midnight_mins < 1440 ~ bed_time - hours(24),  # 如果显示是当天下午6点之后睡的，认为是日期填错了，但是时制填对了，所以减去24小时
+      
+      bed_from_midnight_mins > 1440 | bed_from_midnight_mins < -1440 ~ NA,  # 如果bed_time早于前一天的凌晨6点，或者超过当天24点，可能是日期差距太大，需要手动检查
+      
+      TRUE ~ bed_time  # 其他情况保持不变
+    ),
+    
+    prepare_to_sleep_time_revise = case_when(
+      
+       prepare_from_midnight_mins < -1080 & prepare_from_midnight_mins >= -1440 ~ prepare_to_sleep_time + hours(24),  # 如果显示是前一天凌晨0-6点之间睡的，认为是日期填错了一天，但是时制填对了，所以加24小时
+      
+      prepare_from_midnight_mins < -660 & prepare_from_midnight_mins >= -1080 ~ prepare_to_sleep_time + hours(12), # 如果显示是前一天早上6点到中午13点之点睡的，认为是日期填对了，但是把24小时制的时间当成12小时制的时间，所以加12小时
+      prepare_from_midnight_mins > 360 & prepare_from_midnight_mins <= 780 ~ prepare_to_sleep_time - hours(12),  # 如果显示是当天早上6点到中午13点之间睡的，认为是把日期和时制都填错了，所以减去12小时
+      prepare_from_midnight_mins > 1080 & prepare_from_midnight_mins < 1440 ~ prepare_to_sleep_time - hours(24),  # 如果显示是当天下午6点之后睡的，认为是日期填错了，但是时制填对了，所以减去24小时
+      
+      prepare_from_midnight_mins > 1440 | prepare_from_midnight_mins < -1440 ~ NA,  # 如果prepare_to_sleep_time早于前一天的凌晨0点，或者超过当天24点，可能是日期差距太大，需要手动检查
+      
+      TRUE ~ prepare_to_sleep_time
+    ),
+
+    bed_revised_flag = if_else(bed_time_revise != bed_time, 1, 0),
+    prepare_revised_flag = if_else(prepare_to_sleep_time_revise != prepare_to_sleep_time, 1, 0),
+    bed_wrong_flag = if_else(difftime(prepare_to_sleep_time_revise, bed_time_revise)<0, 1, 0),
+  )
+
+# 检查 prepare_to_sleep_time 早于 bed_time 的记录
+temp = df %>% 
+  select(date_of_today, 
+         bed_time, prepare_to_sleep_time, bed_time_revise, prepare_to_sleep_time_revise,
+         bed_revised_flag, prepare_revised_flag,
+         bed_from_midnight_mins, prepare_from_midnight_mins)
+
+
+term_start = "2025-02-10"
+
+df_organized = df %>% 
+  rename(
+    No = 序号,
+    sleep_latency = `sleep latency`
+  ) %>% 
+  select(
+    No, date_of_today, date_of_today_midnight,
+    bed_time_revise, prepare_to_sleep_time_revise, sleep_latency,
+    total_sleep_time_hour, total_sleep_time_min,
+    bed_time, prepare_to_sleep_time
+  ) %>% 
+  mutate(
+    clean_bed_time = as.numeric(difftime(bed_time_revise, date_of_today_midnight, units = "hours") + 24),
+    
+    clean_prepare_to_sleep_time = as.numeric(difftime(prepare_to_sleep_time_revise, date_of_today_midnight, units = "hours") + 24),
+    
+    sleep_onset = clean_prepare_to_sleep_time + sleep_latency/60,
+    
+    total_sleep_time = as.numeric(total_sleep_time_hour) + as.numeric(total_sleep_time_min)/60,
+    
+    wake_up_time = sleep_onset + total_sleep_time - 24,
+    
+    date_of_today = as.Date(date_of_today),
+    
+    date_of_today_midnight = as.Date(date_of_today_midnight),
+    
+    weekday = weekdays(date_of_today),
+    weekend = if_else(weekday %in% c("星期六", "星期日"), "Weekend", "Weekday"),
+    term_week = difftime(date_of_today, as.Date(term_start), tz = "Asia/Shanghai", units = "weeks"),
+    term_week_2 = case_when(
+      weekend == "Weekend" ~ floor(as.numeric(term_week)) + 0.8,
+      weekend == "Weekday" ~ floor(as.numeric(term_week)) + 0.2,
+      TRUE ~ floor(as.numeric(term_week))
+    )
+  )
+#     # 标识是周几
+# df$date_of_today = as.Date(df$date_of_today)
+# df$weekday = weekdays(df$date_of_today)
+# 
+# # 标识是否是周末
+# df$weekend = if_else(df$weekday %in% c("星期六", "星期日"), "Weekend", "Weekday")
+```
+
+
+```{r 数据分析}
+datasummary_skim(df_organized %>% select(-No, -date_of_today, -date_of_today_midnight,-total_sleep_time_hour,-total_sleep_time_min))
+
+
+# 横轴是日期，纵轴是睡眠时间，画出折线图，把平均睡眠时间和标准差画在一起
+temp = df_organized %>% 
+  select(term_week_2, total_sleep_time,weekend) %>% 
+  group_by(term_week_2) %>% 
+  reframe(
+    weekend = first(weekend),
+    mean_value = mean(total_sleep_time, na.rm = TRUE),
+    sd_value = sd(total_sleep_time, na.rm = TRUE),  # 计算标准差
+    obs = n() # 计算样本量
+  ) 
+
+ggplot(data = temp, aes(x = term_week_2, y = mean_value)) +
+  
+  # 添加标准差阴影（误差带）
+  geom_ribbon(aes(ymin = mean_value - sd_value, ymax = mean_value + sd_value), 
+              alpha = 0.2, color = NA) +
+  
+  # 画出均值折线
+  geom_line(size = 1.5, alpha = 0.8) +
+  
+  # 画出均值点
+  geom_point(aes(size = obs, color = weekend), alpha = 0.8) +
+  
+  labs(title = "睡眠时间均值随日期变化", x = "周数", y = "小时") +
+  
+  # x轴连续格式
+  scale_x_continuous(
+    breaks = seq(3, 17, 0.5),
+    limits = c(3, 13)
+  ) +
+
+  
+  theme_minimal() +
+  
+  mytheme
+
+
+
+```
+
+
+
+
+```{r check time}
+temp = df %>% 
+  select(`序号`, date_of_today, date_of_today_midnight, bed_time_revise, 
+         prepare_to_sleep_time_revise)
+
+df_s = temp %>% 
+  mutate(
+    bed_time = as.numeric(
+      difftime(bed_time_revise, date_of_today_midnight, units = "hours") + 24
+    )
+  )
+
+
+
+```
+
+选取画图所使用数据
+
+```{r sleep variables}
+temp = df %>% 
+  select(PID, date_of_today, date_of_today_midnight, bed_time_revise, 
+         prepare_to_sleep_time_revise, out_bed_time, wake_up_time,
+         sleep_latency, WASO,
+         naptime1_start, naptime1_end, naptime2_start, naptime2_end, 
+         naptime3_start, naptime3_end, naptime4_start, naptime4_end, 
+         naptime5_start, naptime5_end,
+         wake_wrong_flag, bed_wrong_flag)
+
+df_s = temp %>% 
+  mutate(
+    bed_time = as.numeric(
+      difftime(bed_time_revise, date_of_today_midnight, units = "hours") + 24),
+    
+    prepare_to_sleep_time = as.numeric(
+      difftime(prepare_to_sleep_time_revise, date_of_today_midnight, units = "hours") + 24),
+    
+    sleep_onset = prepare_to_sleep_time + sleep_latency/60,
+    
+    out_bed_time = as.numeric(
+      difftime(out_bed_time, date_of_today_midnight, units = "hours")),
+    
+    wake_up_time = as.numeric(
+      difftime(wake_up_time, date_of_today_midnight, units = "hours")),
+    
+    # 拖延时间等于prepare_to_sleep_time - bed_time
+    night_procrastination_time = prepare_to_sleep_time - bed_time,
+    
+    # 早上拖延时间等于out_bed_time - wake_up_time
+    morning_procrastination_time = out_bed_time - wake_up_time,
+    
+    time_in_bed = out_bed_time - bed_time + 24,
+    
+    SPT = wake_up_time - sleep_onset + 24,
+    
+    sleep_duration = SPT - WASO/60,
+    
+    # data of today - 1，方便示意
+    date_of_yesterday = as.Date(date_of_today) - days(1)
+    
+  )
+
+# 只保留没有错误的数据
+df_sc = df_s %>% 
+  filter(bed_wrong_flag == 0 & wake_wrong_flag == 0) %>% 
+  select(-bed_wrong_flag, -wake_wrong_flag)
+```
+
+# 睡眠日志数据简单描述
+
+以下睡眠数据描述基于睡眠日志中的信息：
+
+-   **out_bed_time**对应问卷问题：“您什么时候起床开始新的一天？”  
+-   **wake_up_time**对应问卷问题：“您最后一次醒来是什么时候？”  
+-   **sleep_latency**对应问卷问题：“您花了多长时间入睡？___（分钟）”  
+
+-   **WASO**对应问卷问题：“您昨晚一共醒来了多久？___（分钟）”  
+-   **bed_time**对应问卷问题：“您昨晚大致什么时间上床？___”  
+-   **prepare_to_sleep_time**对应问卷问题：“您什么时候开始尝试入睡的？”  
+
+-   **sleep_onset**计算方法： **prepare_to_sleep_time** + **sleep_latency**
+
+-   **night_procrastination_time**计算方法：**prepare_to_sleep_time** -  **bed_time**
+
+-   **morning_procrastination_time**计算方法：**out_bed_time** - **wake_up_time**  
+
+-   **time_in_bed**计算方法：**out_bed_time** - **bed_time**  
+-   **SPT**：**SPT**是sleep time period的缩写，计算方法：**wake_up_time** - **sleep_onset**  
+
+-   **sleep_duration**计算方法：**SPT** - **WASO**
+
+
+```{r data description,warning=FALSE}
+library(modelsummary)
+
+datasummary_skim(df_sc %>% select(-PID, -date_of_today, -date_of_today_midnight, -date_of_yesterday))
+
+# 把bed_time、prepare_to_sleep_time和sleep_onset的密度图画在一张图上
+ggplot(df_sc, aes(x = bed_time, fill = "bed_time")) +
+  geom_density(alpha = 0.5) +
+  geom_density(aes(x = prepare_to_sleep_time, fill = "prepare_to_sleep_time"), alpha = 0.5) +
+  geom_density(aes(x = sleep_onset, fill = "sleep_onset"), alpha = 0.5) +
+  labs(title = "睡眠时间点变量密度图", x = "时间（小时）", y = "密度") +
+  theme_minimal() +
+  
+  # 图例值标签
+  scale_fill_manual(
+    values = c("bed_time" = "cyan", "prepare_to_sleep_time" = "limegreen", "sleep_onset" = "red"),
+    labels = c("bed_time" ="上床时间", 
+               "prepare_to_sleep_time" = "准备睡觉时间",
+               "sleep_onset" = "入睡时间")) +
+  
+  labs(
+    fill = "变量名"
+    ) +
+
+  mytheme
+
+# 把wake_up_time和out_bed_time的密度图画在一张图上
+ggplot(df_sc, aes(x = wake_up_time, fill = "wake_up_time")) +
+  geom_density(alpha = 0.5) +
+  geom_density(aes(x = out_bed_time, fill = "out_bed_time"), alpha = 0.5) +
+  labs(title = "醒来时间和下床时间密度图", x = "时间（小时）", y = "密度") +
+  theme_minimal() +
+  
+  # 图例值标签
+  scale_fill_manual(
+    values = c("wake_up_time" = "cyan", "out_bed_time" = "orange"),
+    labels = c("下床时间", "醒来时间")) +
+  
+  labs(
+    fill = "变量名"
+    ) +
+
+  mytheme
+
+# 把time_in_bed、SPT和sleep_duration的均值和标准差画在一张图上
+df_sc %>% 
+  select(time_in_bed, SPT, sleep_duration) %>% 
+  gather(key = "variable", value = "value") %>% 
+  group_by(variable) %>% 
+  reframe(
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE)
+  ) %>% 
+  ggplot(aes(x = variable, y = mean, fill = variable)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), position = position_dodge(width = 2), width = 0.1, linewidth = 0.8) +
+  labs(title = "睡眠时间变量均值和标准差", x = "变量名", y = "小时") +
+  
+  # x轴值标签
+  scale_x_discrete(labels = c("time_in_bed" = "time in bed", "SPT" = "sleep period time", "sleep_duration" = "sleep duration")) +
+  
+  scale_fill_manual(
+    values = c("time_in_bed" = "steelblue", 
+               "SPT" = "forestgreen", 
+               "sleep_duration" = "indianred"),
+    labels = c(
+      "time_in_bed" = "time in bed", 
+      "SPT" = "sleep period time", 
+      "sleep_duration" = "sleep duration")
+    ) +
+  
+  labs(
+    fill = "变量名"
+    ) +
+  
+  theme_minimal() +
+  mytheme
+
+
+# time_in_bed、SPT和sleep_duration的均值随日期变化的折线图
+df_sc %>% 
+  select(date_of_yesterday, time_in_bed, SPT, sleep_duration) %>% 
+  gather(key = "variable", value = "value", -date_of_yesterday) %>% 
+  group_by(date_of_yesterday, variable) %>% 
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),  # 计算标准差
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(x = as.Date(date_of_yesterday), y = mean_value, color = variable)) +
+  
+  # 添加标准差阴影（误差带）
+  geom_ribbon(aes(ymin = mean_value - sd_value, ymax = mean_value + sd_value, fill = variable), 
+              alpha = 0.2, color = NA) +
+  
+  # 画出均值折线
+  geom_line(size = 1.5, alpha = 0.8) +
+  
+  # 画出均值点
+  geom_point(size = 2, alpha = 0.8) +
+  
+  labs(title = "睡眠时间变量均值随日期变化", x = "日期", y = "小时") +
+  
+  # x轴日期格式
+  scale_x_date(date_labels = "%m-%d", date_breaks = "1 day") +
+  
+  # 设置颜色
+  scale_color_manual(
+    values = c("time_in_bed" = "steelblue", 
+               "SPT" = "forestgreen", 
+               "sleep_duration" = "indianred"),
+    labels = c(
+      "time_in_bed" = "time in bed", 
+      "SPT" = "sleep period time", 
+      "sleep_duration" = "sleep duration")
+    ) +
+
+  # 设置阴影填充颜色
+  scale_fill_manual(
+    values = c("time_in_bed" = "steelblue", 
+               "SPT" = "forestgreen", 
+               "sleep_duration" = "indianred"),
+    labels = c(
+      "time_in_bed" = "time in bed", 
+      "SPT" = "sleep period time", 
+      "sleep_duration" = "sleep duration")
+  ) +
+  
+  labs(color = "变量名", fill = "变量名") +
+  
+  theme_minimal() +
+  mytheme
+
+# prepare_to_sleep、sleep_onset的均值随日期变化的折线图
+df_sc %>% 
+  select(date_of_yesterday, prepare_to_sleep_time, sleep_onset) %>% 
+  gather(key = "variable", value = "value", -date_of_yesterday) %>% 
+  group_by(date_of_yesterday, variable) %>% 
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),  # 计算标准差
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(x = as.Date(date_of_yesterday), y = mean_value, color = variable)) +
+  
+  # 添加标准差阴影（误差带）
+  geom_ribbon(aes(ymin = mean_value - sd_value, ymax = mean_value + sd_value, fill = variable), 
+              alpha = 0.2, color = NA) +
+  
+  # 画出均值折线
+  geom_line(size = 1.5, alpha = 0.8) +
+  
+  # 画出均值点
+  geom_point(size = 2, alpha = 0.8) +
+  
+  labs(title = "准备睡觉时间和入睡时间均值随日期变化", x = "日期", y = "小时") +
+  
+  # x轴日期格式
+  scale_x_date(date_labels = "%m-%d", date_breaks = "1 day") +
+  
+  # 设置颜色
+  scale_color_manual(
+    values = c("prepare_to_sleep_time" = "steelblue", 
+               "sleep_onset" = "forestgreen"),
+    labels = c(
+      "prepare_to_sleep_time" = "prepare to sleep time", 
+      "sleep_onset" = "sleep onset")
+    ) +
+
+  # 设置阴影填充颜色
+  scale_fill_manual(
+    values = c("prepare_to_sleep_time" = "steelblue", 
+               "sleep_onset" = "forestgreen"),
+    labels = c(
+      "prepare_to_sleep_time" = "prepare to sleep time", 
+      "sleep_onset" = "sleep onset")
+  ) +
+  
+  labs(color = "变量名", fill = "变量名") +
+  
+  theme_minimal() +
+  mytheme
+
+# 起床时间点和下床时间点的均值随日期变化的折线图
+df_sc %>% 
+  select(date_of_today, wake_up_time, out_bed_time) %>% 
+  gather(key = "variable", value = "value", -date_of_today) %>% 
+  group_by(date_of_today, variable) %>% 
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),  # 计算标准差
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(x = as.Date(date_of_today), y = mean_value, color = variable)) +
+  
+  # 添加标准差阴影（误差带）
+  geom_ribbon(aes(ymin = mean_value - sd_value, ymax = mean_value + sd_value, fill = variable), 
+              alpha = 0.2, color = NA) +
+  
+  # 画出均值折线
+  geom_line(size = 1.5, alpha = 0.8) +
+  
+  # 画出均值点
+  geom_point(size = 2, alpha = 0.8) +
+  
+  labs(title = "起床时间和下床时间均值随日期变化", x = "日期", y = "小时") +
+  
+  # x轴日期格式
+  scale_x_date(date_labels = "%m-%d", date_breaks = "1 day") +
+  
+  # 设置颜色
+  scale_color_manual(
+    values = c("wake_up_time" = "indianred", 
+               "out_bed_time" = "tan"),
+    labels = c(
+      "wake_up_time" = "wake up time", 
+      "out_bed_time" = "out bed time")
+    ) +
+
+  # 设置阴影填充颜色
+  scale_fill_manual(
+    values = c("wake_up_time" = "indianred", 
+               "out_bed_time" = "tan"),
+    labels = c(
+      "wake_up_time" = "wake up time", 
+      "out_bed_time" = "out bed time")
+  ) +
+  
+  labs(color = "变量名", fill = "变量名") +
+  
+  theme_minimal() +
+  mytheme
+
+
+
+```
