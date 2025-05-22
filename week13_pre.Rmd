@@ -31,6 +31,7 @@ library(tidyverse)
 library(writexl)
 library(openxlsx)
 library(modelsummary)
+library(table1)
 library(tidyplots)
 options(scipen = 999)
 
@@ -42,7 +43,9 @@ mytheme <- theme(
     axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
     axis.text.y = element_text(size = 10),
     axis.title = element_text(size = 12, face = "bold"),
-    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.ticks = element_line(color = "black")  # 设置坐标轴刻度线
+    
   )
 
 ```
@@ -88,7 +91,7 @@ df$prepare_to_sleep_time = paste0(df$date_of_today, " ", df$prepare_to_sleep_tim
 df$bed_time = as.POSIXct(df$bed_time, format = "%Y-%m-%d %H:%M:%S")
 ```
 
-上床时间清理
+# 数据清理
 
 ```{r data cleaning-bedtime}
 df$prepare_to_sleep_time = as.POSIXct(df$prepare_to_sleep_time, format = "%Y-%m-%d %H:%M:%S")
@@ -198,14 +201,14 @@ df_organized = df %>%
     )
   )
 
-# 睡眠时长分组和时型分组
+# 睡眠时长分组和时型分组、起床时间分组
 df_organized = df_organized %>%
   mutate(
     total_sleep_time_group = case_when(
       total_sleep_time < 6 ~ "<6",
       total_sleep_time >= 6 & total_sleep_time < 7 ~ "[6-7)",
       total_sleep_time >= 7 & total_sleep_time < 9 ~ "[7-9)",
-      total_sleep_time >= 9 ~ ">9",
+      total_sleep_time >= 9 ~ ">=9",
       TRUE ~ NA_character_
     ),
     chronotype = case_when(
@@ -213,7 +216,16 @@ df_organized = df_organized %>%
       clean_prepare_to_sleep_time >= 23 & clean_prepare_to_sleep_time < 24 ~ "[23-24)",
       clean_prepare_to_sleep_time >= 24 & clean_prepare_to_sleep_time < 25 ~ "[24-25)",
       clean_prepare_to_sleep_time >= 25 & clean_prepare_to_sleep_time < 26 ~ "[25-26)",
-      clean_prepare_to_sleep_time >= 26 ~ ">26",
+      clean_prepare_to_sleep_time >= 26 ~ ">=26",
+      TRUE ~ NA_character_
+    ),
+    wake_up_time_group = case_when(
+      wake_up_time < 8 ~ "<8",
+      wake_up_time >= 8 & wake_up_time < 9 ~ "[8-9)",
+      wake_up_time >= 9 & wake_up_time < 10 ~ "[9-10)",
+      wake_up_time >= 10 & wake_up_time < 11 ~ "[10-11)",
+      wake_up_time >= 11 & wake_up_time < 12 ~ "[11-12)",
+      wake_up_time >= 12 ~ ">=12",
       TRUE ~ NA_character_
     )
   )
@@ -230,14 +242,64 @@ df_organized = df_organized %>%
 # df$weekend = if_else(df$weekday %in% c("星期六", "星期日"), "Weekend", "Weekday")
 ```
 
+# 要点汇总
+
+-   **数据清理**：修正了绝大部分数据错误，主要是日期错误与时制不分，删除了2条上床时间在凌晨6点以后，且上床时间和准备入睡时间间隔超过2小时的数据
+-   **各变量计算方式**：
+    -   上床时间（bed time）：对应问卷中“您昨晚大致什么时间上床？”
+    -   准备入睡时间（prepare to sleep
+        time）：对应问卷中“您昨晚什么时候开始尝试入睡的？”
+    -   入睡潜伏期（sleep latency）：对应问卷中“您花了多长时间入睡？”
+    -   睡眠时长（total sleep time）：对应问卷中“您昨晚睡了多长时间？”
+    -   睡眠拖延时间（night procrastination time）：准备入睡时间 -
+        上床时间
+    -   睡着时间点（sleep onset）：准备入睡时间 + 入睡潜伏期
+    -   起床时间（wake up time）：睡着时间点 + 睡眠时长 - 24小时
+-   **有趣的信息：**
+    -   周中和周末的上床时间点、总睡眠时长、起床时间点有显著差异，但实际上准备睡觉的时间、睡眠潜伏期、和睡眠拖延时间没有显著差异。这说明**同学们可能主要是通过晚起来补觉，而不是通过提前准备睡觉来增加睡眠时长**
+    -   无论是分周中周末，还是总体上看，都有**超过一半**的同学睡眠时长不足7小时
+    -   在周中，睡眠在9小时以上的同学占比仅为6.54%，而在周末，**睡眠在9小时以上的同学占比超过了20%**，说明同学们还是有意识地在周末补觉
+    -   在准备睡觉时间上，在周中约有20%同学在两点后上床，但在**周末升到了30%**
+    -   社会性时差约为0.78小时（46.8分钟）
+
 # 描述性统计
+
+## 总体描述性统计
+
 ```{r 总体描述性统计, warnings=FALSE}
-datasummary_skim(df_organized %>% select(-No, -date_of_today, -date_of_today_midnight,-total_sleep_time_hour,-total_sleep_time_min))
+df_table1 = df_organized
+
+df_table1 = df_table1 %>% 
+  mutate(
+    weekend = factor(weekend, levels = c("Weekday", "Weekend")),
+    total_sleep_time_group = factor(total_sleep_time_group, levels = c("<6", "[6-7)", "[7-9)", ">=9")),
+    chronotype = factor(chronotype, levels = c("<23", "[23-24)", "[24-25)", "[25-26)", ">=26")),
+    wake_up_time_group = factor(wake_up_time_group, levels = c("<8", "[8-9)", "[9-10)", "[10-11)", "[11-12)", ">=12"))
+  )
+
+label(df_table1$weekend) <- "Weekend"
+label(df_table1$total_sleep_time_group) <- "Total sleep time group"
+label(df_table1$chronotype) <- "Chronotype"
+label(df_table1$clean_bed_time) <- "Bed time"
+label(df_table1$sleep_onset) <- "Sleep onset"
+label(df_table1$total_sleep_time_group) <- "TST group"
+label(df_table1$clean_prepare_to_sleep_time) <- "Prepare to sleep time"
+label(df_table1$sleep_latency) <- "Sleep latency"
+label(df_table1$night_procrastination_time) <- "Night procrastination time"
+label(df_table1$wake_up_time) <- "Wake up time"
+label(df_table1$total_sleep_time) <- "Total sleep time"
+label(df_table1$term_week_2) <- "Term week"
+label(df_table1$wake_up_time_group) <- "Wake up time group"
+
+
+
+datasummary_skim(df_table1 %>% select(-No, -date_of_today, -date_of_today_midnight,-total_sleep_time_hour,-total_sleep_time_min))
 
 ```
 
+## 分组描述性统计
+
 ```{r 分组描述性统计, warnings=FALSE}
-library(table1)
 pvalue <- function(x, ...) {
     # Construct vectors of data y, and groups (strata) g
     y <- unlist(x)
@@ -274,25 +336,6 @@ my.render.cat <- function(x) {
 footnote_text <- "Note: The p-values are calculated by chi-square test for categorical variables. Column percentages are presented in paratheses. "
 # 按周中和周末分组
 
-df_table1 = df_organized
-
-df_table1 = df_table1 %>% 
-  mutate(
-    weekend = factor(weekend, levels = c("Weekday", "Weekend")),
-    total_sleep_time_group = factor(total_sleep_time_group, levels = c("<6", "[6-7)", "[7-9)", ">9")),
-    chronotype = factor(chronotype, levels = c("<23", "[23-24)", "[24-25)", "[25-26)", ">26"))
-  )
-
-label(df_table1$weekend) <- "Weekend"
-label(df_table1$total_sleep_time_group) <- "Total sleep time group"
-label(df_table1$chronotype) <- "Chronotype"
-label(df_table1$clean_bed_time) <- "Bed time"
-label(df_table1$clean_prepare_to_sleep_time) <- "Prepare to sleep time"
-label(df_table1$sleep_latency) <- "Sleep latency"
-label(df_table1$night_procrastination_time) <- "Night procrastination time"
-label(df_table1$wake_up_time) <- "Wake up time"
-label(df_table1$total_sleep_time) <- "Total sleep time"
-label(df_table1$term_week_2) <- "Term week"
 
 
 
@@ -300,7 +343,7 @@ label(df_table1$term_week_2) <- "Term week"
 
 table1(~ total_sleep_time + clean_bed_time + clean_prepare_to_sleep_time + 
          sleep_latency + night_procrastination_time + wake_up_time + 
-         total_sleep_time_group + chronotype| weekend,
+         total_sleep_time_group + chronotype + wake_up_time_group | weekend,
        data = df_table1, 
        overall = FALSE, 
        extra.col = list(`P-value` = pvalue),
@@ -310,41 +353,10 @@ table1(~ total_sleep_time + clean_bed_time + clean_prepare_to_sleep_time +
        footnote = footnote_text )
 
 
-# df_figure4$h_overweight <- factor(df_figure4$h_overweight)
-# df_figure4$h_obese <- factor(df_figure4$h_obese)
-# df_figure4$h_normal <- factor(df_figure4$h_normal)
-# df_figure4$h_underweight <- factor(df_figure4$h_underweight)
-# df_figure4$w_overweight <- factor(df_figure4$w_overweight)
-# df_figure4$w_obese <- factor(df_figure4$w_obese)
-# df_figure4$w_normal <- factor(df_figure4$w_normal)
-# df_figure4$w_underweight <- factor(df_figure4$w_underweight)
-# 
-# label(df_figure4$h_overweight) <- "Husband overweight"
-# label(df_figure4$h_obese) <- "Husband obese"
-# label(df_figure4$h_normal) <- "Husband normal"
-# label(df_figure4$h_underweight) <- "Husband underweight"
-# label(df_figure4$w_overweight) <- "Wife overweight"
-# label(df_figure4$w_obese) <- "Wife obese"
-# label(df_figure4$w_normal) <- "Wife normal"
-# label(df_figure4$w_underweight) <- "Wife underweight"
-
-
-# table1(~ h_underweight +  h_normal + h_overweight + h_obese + 
-#          w_underweight +  w_normal + w_overweight + w_obese | edu_assor5,
-#        data = df_figure4, 
-#        overall = FALSE, 
-#        extra.col = list(`P-value` = pvalue),
-#        # topclass = "Rtable1-zebra",
-#        render.categorical = my.render.cat,
-#        caption = "Descriptive statistics of gendered education gradient of BMI at couple level: full sample",
-#        footnote = footnote_text )
-
-
 
 ```
 
 # 各项指标随时间变化画图
-
 
 ## 睡眠时长
 
@@ -379,8 +391,6 @@ a = ggplot(data = temp, aes(x = term_week_2, y = mean_value)) +
     breaks = seq(3, 17, 0.5),
     limits = c(3, 15)
   ) +
-
-  
   theme_minimal() +
   
   mytheme
@@ -388,7 +398,6 @@ a = ggplot(data = temp, aes(x = term_week_2, y = mean_value)) +
 plotly::ggplotly(a)
 
 ```
-
 
 ## 上床时间点
 
@@ -433,6 +442,7 @@ plotly::ggplotly(a)
 ```
 
 ## 准备睡觉时间点
+
 ```{r plot prepare to sleep time}
 # 横轴是日期，纵轴是准备睡觉时间，画出折线图，把平均准备睡觉时间和标准差画在一起
 temp = df_organized %>% 
@@ -475,6 +485,7 @@ plotly::ggplotly(a)
 ```
 
 ## 起床时间点
+
 ```{r plot wake up time}
 # 横轴是日期，纵轴是起床时间，画出折线图，把平均起床时间和标准差画在一起
 temp = df_organized %>% 
@@ -517,6 +528,7 @@ plotly::ggplotly(a)
 ```
 
 ## 睡眠潜伏期
+
 ```{r plot sleep latency}
 # 横轴是日期，纵轴是睡眠潜伏期，画出折线图，把平均睡眠潜伏期和标准差画在一起
 temp = df_organized %>% 
@@ -557,8 +569,8 @@ plotly::ggplotly(a)
 
 ```
 
-
 ## 睡眠拖延
+
 ```{r plot sleep procrastination}
 # 横轴是日期，纵轴是睡眠拖延时间，画出折线图，把平均睡眠拖延时间和标准差画在一起
 temp = df_organized %>% 
@@ -599,7 +611,6 @@ a = ggplot(data = temp, aes(x = term_week_2, y = mean_value)) +
 plotly::ggplotly(a)
 
 ```
-
 
 # 各项指标周中周末对比
 
@@ -681,7 +692,9 @@ p_procrastination_2 = df_organized %>% filter(night_procrastination_time < 2) |>
 
 ```
 
-```{r testing}
+## 总体对比
+
+```{r 总体对比}
 # 转换为长格式
 df_tst <- df_organized %>% 
   select(weekend, value = total_sleep_time) %>% 
@@ -726,7 +739,11 @@ p_combined <- df_long |>
 
 # 显示图表
 p_combined
+```
 
+## 关于睡觉时间点的周中周末对比
+
+```{r 关于睡觉时间点的周中周末对比}
 # Bed time，Prepare to sleep time
 df_long |> filter(metric %in% c("Bed time", "Prepare to sleep time")) |>
   tidyplot(color = weekend, y = value,x = metric) |>
@@ -737,7 +754,11 @@ df_long |> filter(metric %in% c("Bed time", "Prepare to sleep time")) |>
   adjust_y_axis(title = "时间（小时）") |>
   add_title("周中周末与上床时间和准备睡觉时间的关系") %>%
   adjust_size(width = 100, height = 100)
+```
 
+## 睡眠潜伏期、睡眠拖延时间的周中周末对比
+
+```{r 关于睡眠潜伏期和睡眠拖延时间的周中周末对比}
 # 画出sleep latency和sleep procrastination time的箱线图
 df_long |> filter(metric %in% c( "Sleep latency", "Sleep procrastination time")) |>
   tidyplot(color = weekend, y = value,x = metric) |>
@@ -748,6 +769,11 @@ df_long |> filter(metric %in% c( "Sleep latency", "Sleep procrastination time"))
   adjust_y_axis(title = "时间（分钟）") |>
   adjust_size(width = 100, height = 100)
 
+```
+
+## 睡眠时长、起床时间的周中周末对比
+
+```{r 关于起床时间的周中周末对比}
 # 画出total sleep time
 df_long |> filter(metric %in% c("Total sleep time")) |>
   tidyplot(color = weekend, y = value,x = metric) |>
@@ -769,17 +795,12 @@ df_long |> filter(metric %in% c("Wake up time")) |>
   adjust_y_axis(title = "时间（小时）") |>
   adjust_size(width = 100, height = 100)
 
-
-  
-
-
 ```
-
-
 
 # 分类变量的占比随时间变化
 
 ## 睡眠时长分组百分比
+
 ```{r 睡眠时长分组百分比}
 ## 睡眠时长
 # 横轴是日期，纵轴是睡眠时长，画出柱状图，把各个睡眠时长的占比画在一起
@@ -793,14 +814,14 @@ temp = df_organized %>%
   mutate(
     total = sum(mean_value),
     proportion = mean_value / total,
-    total_sleep_time_group = factor(total_sleep_time_group, levels = rev(c("<6", "[6-7)", "[7-9)", ">9")), ordered = TRUE)
+    total_sleep_time_group = factor(total_sleep_time_group, levels = rev(c("<6", "[6-7)", "[7-9)", ">=9")), ordered = TRUE)
   )
 
 a = ggplot(data = temp, aes(x = term_week_2, y = proportion, fill = total_sleep_time_group)) +
   # 添加标准差阴影（误差带）
   geom_bar(stat = "identity", position = "fill", alpha = 1) +
   
-  labs(title = "睡眠时长均值随日期变化", x = "周数", y = "百分比") +
+  labs(title = "睡眠时长分组占比随日期变化", x = "周数", y = "百分比") +
   
   # x轴连续格式
   scale_x_continuous(
@@ -825,6 +846,7 @@ plotly::ggplotly(a)
 ```
 
 ## 上床时间分组百分比
+
 ```{r 上床时间分组百分比}
 # 横轴是日期，纵轴是chronotype，画出柱状图，把各个上床时间的占比画在一起
 temp = df_organized %>% 
@@ -837,14 +859,14 @@ temp = df_organized %>%
   mutate(
     total = sum(mean_value),
     proportion = mean_value / total,
-    chronotype = factor(chronotype, levels = rev(c("<23", "[23-24)", "[24-25)", "[25-26)", ">26")), ordered = TRUE)
+    chronotype = factor(chronotype, levels = rev(c("<23", "[23-24)", "[24-25)", "[25-26)", ">=26")), ordered = TRUE)
   )
 
 a = ggplot(data = temp, aes(x = term_week_2, y = proportion, fill = chronotype)) +
   # 添加标准差阴影（误差带）
   geom_bar(stat = "identity", position = "fill", alpha = 1) +
   
-  labs(title = "上床时间均值随日期变化", x = "周数", y = "百分比") +
+  labs(title = "上床时间分组占比随日期变化", x = "周数", y = "百分比") +
   
   # x轴连续格式
   scale_x_continuous(
@@ -864,4 +886,45 @@ a = ggplot(data = temp, aes(x = term_week_2, y = proportion, fill = chronotype))
 plotly::ggplotly(a)
 ```
 
+## 起床时间分组百分比
 
+```{r 起床时间分组百分比}
+# 横轴是日期，纵轴是wake_up，画出柱状图，把各个起床时间的占比画在一起
+temp = df_organized %>% 
+  select(term_week_2, wake_up_time_group, weekend) %>% 
+  group_by(term_week_2, wake_up_time_group) %>% 
+  reframe(
+    weekend = first(weekend),
+    mean_value = n()
+  ) %>% 
+  mutate(
+    total = sum(mean_value),
+    proportion = mean_value / total,
+    wake_up_time_group = factor(wake_up_time_group, levels = rev(c("<8", "[8-9)", "[9-10)", "[10-11)", "[11-12)", ">=12")), ordered = TRUE)
+  )
+
+a = ggplot(data = temp, aes(x = term_week_2, y = proportion, fill = wake_up_time_group)) +
+  # 添加标准差阴影（误差带）
+  geom_bar(stat = "identity", position = "fill", alpha = 1) +
+  
+  labs(title = "起床时间分组占比随日期变化", x = "周数", y = "百分比") +
+  
+  # x轴连续格式
+  scale_x_continuous(
+    breaks = seq(3, 17, 0.5),
+    limits = c(3, 15)
+    
+  ) +
+  # y轴百分比格式
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  
+  # fill图例标签
+  
+  guides(fill = guide_legend(title = "起床时间分组")) +
+  theme_minimal() +
+  mytheme
+
+plotly::ggplotly(a)
+
+
+```
