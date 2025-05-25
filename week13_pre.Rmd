@@ -1,5 +1,5 @@
 ---
-title: "Week 13 Class Average"
+title: "Week 15 Class Average"
 author: "Zhenyu Li"
 date: "`r Sys.Date()`"
 output: 
@@ -50,7 +50,7 @@ mytheme <- theme(
 
 ```
 
-```{r read data, echo=FALSE, include=FALSE}
+```{r read data}
 # df0 = read_excel("《睡眠与健康》睡眠日志raw-第一批.xlsx")
 
 # 第二批
@@ -928,3 +928,13 @@ plotly::ggplotly(a)
 
 
 ```
+
+```{r, eval = FALSE}
+china_map <- st_read(dsn = "quanguo.json", stringsAsFactors = FALSE, crs = st_crs(4326))
+
+china_map
+
+
+plot(china_map["QUHUADAIMA"])
+```
+
